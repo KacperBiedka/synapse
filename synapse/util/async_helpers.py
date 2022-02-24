@@ -18,9 +18,10 @@ import collections
 import inspect
 import itertools
 import logging
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import (
     Any,
+    AsyncIterator,
     Awaitable,
     Callable,
     Collection,
@@ -39,7 +40,7 @@ from typing import (
 )
 
 import attr
-from typing_extensions import ContextManager
+from typing_extensions import AsyncContextManager
 
 from twisted.internet import defer
 from twisted.internet.defer import CancelledError
@@ -473,7 +474,7 @@ class ReadWriteLock:
 
     Example:
 
-        with await read_write_lock.read("test_key"):
+        async with read_write_lock.read("test_key"):
             # do some work
     """
 
@@ -496,7 +497,7 @@ class ReadWriteLock:
         # Latest writer queued
         self.key_to_current_writer: Dict[str, defer.Deferred] = {}
 
-    async def read(self, key: str) -> ContextManager:
+    def read(self, key: str) -> AsyncContextManager:
         new_defer: "defer.Deferred[None]" = defer.Deferred()
 
         curr_readers = self.key_to_current_readers.setdefault(key, set())
@@ -506,12 +507,15 @@ class ReadWriteLock:
 
         # We wait for the latest writer to finish writing. We can safely ignore
         # any existing readers... as they're readers.
-        if curr_writer:
-            await make_deferred_yieldable(curr_writer)
 
-        @contextmanager
-        def _ctx_manager() -> Iterator[None]:
+        @asynccontextmanager
+        async def _ctx_manager() -> AsyncIterator[None]:
             try:
+                # Wait for the latest writer to finish.
+                # May raise a `CancelledError` if the `Deferred` wrapping us is
+                # cancelled.
+                if curr_writer:
+                    await make_deferred_yieldable(curr_writer)
                 yield
             finally:
                 with PreserveLoggingContext():
@@ -520,7 +524,7 @@ class ReadWriteLock:
 
         return _ctx_manager()
 
-    async def write(self, key: str) -> ContextManager:
+    def write(self, key: str) -> AsyncContextManager:
         new_defer: "defer.Deferred[None]" = defer.Deferred()
 
         curr_readers = self.key_to_current_readers.get(key, set())
@@ -536,11 +540,13 @@ class ReadWriteLock:
         curr_readers.clear()
         self.key_to_current_writer[key] = new_defer
 
-        await make_deferred_yieldable(defer.gatherResults(to_wait_on))
-
-        @contextmanager
-        def _ctx_manager() -> Iterator[None]:
+        @asynccontextmanager
+        async def _ctx_manager() -> AsyncIterator[None]:
             try:
+                # Wait for all current readers and the latest writer to finish.
+                # May raise a `CancelledError` if the `Deferred` wrapping us is
+                # cancelled.
+                await make_deferred_yieldable(defer.gatherResults(to_wait_on))
                 yield
             finally:
                 with PreserveLoggingContext():
