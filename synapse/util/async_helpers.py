@@ -664,3 +664,18 @@ def maybe_awaitable(value: Union[Awaitable[R], R]) -> Awaitable[R]:
         return value
 
     return DoneAwaitable(value)
+
+
+def stop_cancellation(deferred: "defer.Deferred[T]") -> "defer.Deferred[T]":
+    """Prevent a `Deferred` from being cancelled by wrapping it in another `Deferred`.
+
+    Args:
+        deferred: The `Deferred` to protect against cancellation.
+
+    Returns:
+        A new `Deferred`, which will contain the result of the original `Deferred`,
+        but will not propagate cancellation through to the original.
+    """
+    new_deferred: defer.Deferred[T] = defer.Deferred()
+    deferred.addBoth(new_deferred.callback)
+    return new_deferred
