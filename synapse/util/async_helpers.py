@@ -513,9 +513,10 @@ class ReadWriteLock:
             try:
                 # Wait for the latest writer to finish.
                 # May raise a `CancelledError` if the `Deferred` wrapping us is
-                # cancelled.
+                # cancelled. The `Deferred` we are waiting on must not be cancelled,
+                # since we do not own it.
                 if curr_writer:
-                    await make_deferred_yieldable(curr_writer)
+                    await stop_cancellation(make_deferred_yieldable(curr_writer))
                 yield
             finally:
                 with PreserveLoggingContext():
@@ -535,9 +536,6 @@ class ReadWriteLock:
         if curr_writer:
             to_wait_on.append(curr_writer)
 
-        # We can clear the list of current readers since the new writer waits
-        # for them to finish.
-        curr_readers.clear()
         self.key_to_current_writer[key] = new_defer
 
         @asynccontextmanager
@@ -545,8 +543,11 @@ class ReadWriteLock:
             try:
                 # Wait for all current readers and the latest writer to finish.
                 # May raise a `CancelledError` if the `Deferred` wrapping us is
-                # cancelled.
-                await make_deferred_yieldable(defer.gatherResults(to_wait_on))
+                # cancelled. The `Deferred`s we are waiting on must not be cancelled,
+                # since we do not own them.
+                await stop_cancellation(
+                    make_deferred_yieldable(defer.gatherResults(to_wait_on))
+                )
                 yield
             finally:
                 with PreserveLoggingContext():
